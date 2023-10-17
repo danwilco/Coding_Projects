@@ -1,0 +1,122 @@
+---
+title: "Non_NormlaisedNMR_ITU_Study - Initial Data Tidying and Visualisation"
+author: "DJW and IJG"
+date: "07/05/2020"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+load libraries and packages
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggfortify)
+library(ggpubr)
+library(pheatmap)
+library(limma)
+library(splines)
+```
+
+## Initial Data Tidying and Manipulation
+
+load in non-normalised metabolite data & normalise by scaling and centering.
+```{r}
+setwd("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/")
+# get data - change accordingly
+#moleculeData <- read_csv("Plasma_SmallMolOnly_ITU_project.csv") # small mol
+moleculeData <- read_csv("Plasma_Lipids_ITU_project.csv") # Lipids
+#moleculeData <- read_csv("Plasma_AAOnly_ITU_project.csv") # AA
+
+# quick rename
+all_metab <- moleculeData
+# some metabolite abundances are negative - remove these by converting to zeros
+all_metab[all_metab < 0] <- 0
+# log transform data + 1 to avoid inf or NaN's
+all_metab[,2:ncol(all_metab)] <- log(all_metab[, 2:ncol(all_metab)] + 1) 
+# check for NA's
+sum(is.na(all_metab))
+# scale and center
+all_metab[,2:ncol(all_metab)] <- scale(all_metab[,2:ncol(all_metab)], scale = TRUE, center = TRUE) 
+# check
+sum(is.na(all_metab))
+```
+
+The molecule data are now scaled & centered. Next we tidy the data to standard long format for exploratory plots.
+
+```{r}
+# create long format data frame for plotting
+namesCol <- names(all_metab[2:ncol(all_metab)])
+all_metab_long <- all_metab %>% pivot_longer(cols=all_of(namesCol), names_to = "Metabs", values_to = "Peak_Area")
+```
+
+The study involved blood sampling from participants under 2 feeding regimes at various centers. Blood was sampled twice a day (9am & 1pm) on days 1, 7 & 10. Below we add information on time of sampling, day of sampling and center.
+
+```{r}
+# add in time, day and site information
+sample_data <- read_csv('/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Plasma trial samples randomisation.csv',col_names=F)
+
+# get a vector of the day of measurement
+days <- as.character(sample_data[1,2:13]) 
+# get a vector of the time of measurement
+# format X_Y where X is time and Y is whether the sample was taken before (Y=1) or after the bolus of feed (Y=2)
+other_value <- sample_data[2,2:13] 
+# combine these and use as headers
+new_col_names <- paste(as.character(days), as.character(other_value), sep=':')
+new_col_names <- c('PtID', new_col_names)
+# add new col names
+colnames(sample_data) <- new_col_names
+# drop redundant information from first 3 rows
+sample_data <- sample_data %>% slice(3:n())
+
+# pivot data
+sample_data_long <- sample_data %>% pivot_longer(cols = `d1:9_1`:`d10:1_2`, names_to = c('Day', 'Sample_time'), names_sep=':', values_to = 'code')
+# split out useful info in pt id, first two digits are for sites
+# from Zudin - Patient id yes links back- the first two numbers to site, and the next three to the patient (email 28/2/2020)
+sample_data_long$site_id <- str_sub(sample_data_long$PtID, 1, 2)
+colnames(sample_data_long)[4] <- "Sample_ID"
+sample_data_long <- na.omit(sample_data_long) # remove times for patients when samples weren't collected
+```
+
+Some participants have missing samples e.g. no plasma left and some IDs don't match to randomisation. We'll remove these.
+
+```{r}
+indexMissing <- setdiff(sample_data_long$Sample_ID, all_metab_long$Sample_ID)
+# so we have some mismatch for reasons above
+
+# filter out missing ids by keeping sample ids NOT IN(!) indexMissing
+sample_data_long <- filter(sample_data_long, !Sample_ID %in% indexMissing)
+
+# no differences? yes (i.e. 0) is good
+setdiff(sample_data_long$Sample_ID, all_metab_long$Sample_ID)
+# # should now be good to join
+```
+
+Merge site, time and day data with metabolite data.
+
+```{r}
+all_metab_long_Full <- full_join(all_metab_long, sample_data_long, by = "Sample_ID")
+# check for NA
+sum(is.na(all_metab_long_Full))
+# where are these NA's?
+missings <- apply(is.na(all_metab_long_Full), 2, which)
+# there are 88 Na's in the datastet across cols PtID, Day, Sample_time, site_id
+# remove these rows
+all_metab_long_Full <- all_metab_long_Full[-missings$PtID,]
+```
+
+Add in information for which participant was in which arm of the study (continuous or bolus feeding).
+
+```{r}
+# treatment allocation info
+alloc <- read_csv('/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/treatment_allocation.csv', col_types = 'cc') 
+# merge with all data
+all_data <- inner_join(alloc, all_metab_long_Full, by = 'PtID') # inner_join only keeps those matching PtIDs
+# data tidying complete - write out file change based on input file
+#write.csv(all_data, "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/SmallMolOnly/allDataTidy_SmallMolNMR.csv") # change file name and address as appropriate.
+write.csv(all_data, "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/LipidOnly/allDataTidy_LipidsNMR.csv") 
+#write.csv(all_data, "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AAOnly/allDataTidy_AANMR.csv") 
+
+## END OF DATA TIDYING
+```
+

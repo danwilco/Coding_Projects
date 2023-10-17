@@ -1,0 +1,343 @@
+---
+title: "Non_NormlaisedNMR_ITU_Study - Final Plot Outputs for Sig Metabs Part 4"
+author: "DJW & IJG"
+date: "07/05/2020"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+load libraries and packages
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggfortify)
+library(ggpubr)
+library(pheatmap)
+library(limma)
+library(splines)
+library(sjPlot)
+```
+
+## Create overall volcano plot of all basal comparisons for DE
+
+```{r}
+# Apply multiple testing correction and obtain stats
+list_fitMetabs <- list(fitBasalTime_AA, fitBasalTime_Lipid, fitBasalTime_SmallMol)
+volcanoPlot_list <- list() # to hold generated plots
+plot_id <- c("AA", "Lipid", "Small Molecule")
+labs <- c("Basal D10 vs D1", "Basal D10 vs D7", "Basal D7 vs D1")
+
+for (i in 1:length(list_fitMetabs)) {
+  stats_df_AA <- topTable(list_fitMetabs[[i]], number = Inf ) %>%
+  tibble::rownames_to_column("Metabolite")
+
+  # Let's extract the contrast p values for each and transform them with -log10()
+  # contrast_p_vals_df_AA <- -log10(list_fitMetabs[[1]]$p.value) %>%
+  contrast_p_vals_df_AA <- as.data.frame(list_fitMetabs[[i]]$p.value) %>%  # extract p values
+    mutate(BasalD10_D1 = p.adjust(BasalD10_D1, method = "BH"),
+           BasalD7_D1 = p.adjust(BasalD7_D1, method = "BH"), 
+           BasalD10_D7 = p.adjust(BasalD10_D7, method = "BH")) # correct p values
+    contrast_p_vals_df_AA <- -log10(contrast_p_vals_df_AA) %>%
+    # Store metabolites as their own column
+    tibble::rownames_to_column("Metabolite") %>%
+    # Make this into long format
+    tidyr::pivot_longer(dplyr::contains("Basal"),
+                      names_to = "contrast",
+                      values_to = "neg_log10_p_val"
+  )
+
+  # Let's extract the fold changes from `stats_df`
+  log_fc_df <- stats_df_AA %>%
+    # We only want to keep the `Gene` column as well
+    dplyr::select("Metabolite", dplyr::contains("Basal")) %>%
+  # Make this a longer format
+    tidyr::pivot_longer(dplyr::contains("Basal"),
+                      names_to = "contrast",
+                      values_to = "logFoldChange"
+    )
+
+
+  # inner join these dataframes together
+  plot_df <- log_fc_df %>%
+    dplyr::inner_join(contrast_p_vals_df_AA,
+                    by = c("Metabolite", "contrast"),
+                    # This argument will add the given suffixes to the column names
+                    # from the respective data frames, helping us keep track of which columns
+                    # hold which types of values
+                    suffix = c("_log_fc", "_p_val")
+    )
+
+  # Convert p value cutoff to negative log 10 scale
+  p_val_cutoff <- -log10(0.05)
+
+  # Absolute value cutoff for fold changes
+  abs_fc_cutoff <- 0.5
+
+  # use above cutoff to declare which are considered significant
+  plot_df <- plot_df %>%
+    dplyr::mutate(
+      signif_label = dplyr::case_when(
+        abs(logFoldChange) > abs_fc_cutoff & neg_log10_p_val > p_val_cutoff
+        ~ "p-val and FC",
+        abs(logFoldChange) > abs_fc_cutoff ~ "FC",
+        neg_log10_p_val > p_val_cutoff ~ "p-val",
+        TRUE ~ "NS"
+      )
+    )
+  # convert contrast names to plot friendly
+  plot_df <- mutate(plot_df, contrast = recode(contrast, "BasalD10_D1" = "Basal D10 v D1", "BasalD10_D7" = "Basal D10 v D7", "BasalD7_D1" = "Basal D7 v D1"))
+
+  # now lets plot these as volcano plots for each contrast
+  volcanoes_plot <- ggplot(
+    plot_df,
+    aes(
+      x = logFoldChange, # Fold change as x value
+      y = neg_log10_p_val, # -log10(p value) for the contrasts
+      color = signif_label # Color code by significance cutoffs variable we made
+    )
+  ) +
+    # Make a scatter plot with points that are 30% opaque using `alpha`
+    geom_jitter(width = 0.06, alpha = 0.8, size = 3) +
+    # Draw our `p_val_cutoff` for line here
+    geom_hline(yintercept = p_val_cutoff, linetype = "dashed") +
+    # Using our `abs_fc_cutoff` for our lines here
+    geom_vline(xintercept = c(-abs_fc_cutoff, abs_fc_cutoff), linetype = "dashed") +
+    # The default colors aren't great, we'll specify our own here
+    scale_colour_manual(values = c("red", "darkgray", "blue", "black"), name = "Significance Label", breaks = c("FC", "NS", "p-val", "p-val and FC" )) +
+    # Let's be more specific about what this p value is in our y axis label
+    ylab("Contrast -log10(p value)") +
+    # change y axis scale to match across plots
+    ylim(0, 2.5) +
+    # add title
+    ggtitle(paste0("Significantly Different ", plot_id[[i]], " Metabolites")) +
+    # This makes separate plots for each contrast!
+    facet_wrap(~contrast) +
+    # change facet wrap labels - https://www.datanovia.com/en/blog/how-to-change-ggplot-facet-labels/
+    #facet_grid(~contrast, labeller(contrast = labs)) +
+    # change x lab position
+    theme(axis.text.x = element_text(angle = 45,vjust = 1, hjust=1))
+    # Just for making it prettier!
+    theme_classic()
+
+  # Print out the plot!
+  volcanoes_plot
+  # cache plots in list
+  volcanoPlot_list[[i]] <- volcanoes_plot
+}
+
+# arrange plots and write out
+plotsArranged <- ggarrange(plotlist = volcanoPlot_list, nrow = 1, ncol = 1, common.legend = FALSE, legend = "bottom")
+# export as PDFs
+ggexport(plotsArranged, filename="/Users/danwilkinson/OneDrive - The University of Nottingham/Work_Folders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/EDA_figs/Volcano_Plots3_Rescaled.pdf")
+```
+
+## Plotting of Sig Output for Metabolites - Basal Comparisons and Correlation to Mass
+
+```{r}
+## Plots - creates individual plots per sig variable, create loop structure as before
+# load in and merge with AA sig metabs
+BasalSigMetabsSmallMol <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/SmallMolOnly/BasalTimeContrasts/BasalTimeSigSmallMolOnly.csv")
+BasalSigMetabsAA <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AAOnly/BasalTimeContrasts/BasalTimeSigAAOnly.csv")
+# drop first col
+BasalSigMetabsSmallMol <- BasalSigMetabsSmallMol[,-1]
+BasalSigMetabsAA <- BasalSigMetabsAA[,-1]
+
+# join in single dataframe
+names(BasalSigMetabsAA)
+join_byNames <- c("PtID","arm","Sample_ID","Day", "Sample_time","timePoint", "samplePoint", "site_id")
+BasalTimeSigAllMetabs <- inner_join(BasalSigMetabsSmallMol, BasalSigMetabsAA, by = join_byNames) 
+
+# make long dataframe from sigMetabs dataframe
+sig_metabs <- names(BasalTimeSigAllMetabs)[9:ncol(BasalTimeSigAllMetabs)]
+sigBasalMetabLonger <- as.data.frame(BasalTimeSigAllMetabs %>% pivot_longer(cols = all_of(sig_metabs), names_to = 'Metabs', values_to = 'NormAbundance'))
+
+plot_list <- list() # to hold generated plots
+
+for (i in 1:length(sig_metabs)) { # loop to create plots per metabolite
+  metab <- sig_metabs[i]
+  bxplt <- sigBasalMetabLonger %>% filter(Metabs == metab) %>% ggboxplot(x = "Day", y = "NormAbundance",
+                 color = "Day", palette = "jco", x.text.angle = 45, ylab = "Log Abundance (AU)",
+                 xlab = FALSE, legend = "bottom", title = paste0(metab), add = "jitter")
+  # change font size and type
+  bxplt <- bxplt + font("title", size = 12, face = "bold.italic") +
+    font("ylab", size = 10) +
+    font("x.text", size = 10) +
+    font("y.text", size = 10)
+  # cache plots in list
+  plot_list[[i]] <- bxplt
+} 
+
+# arrange plots into 4 plots per page
+plotsArranged <- ggarrange(plotlist = plot_list, nrow = 2, ncol = 2, common.legend = TRUE, legend = "bottom")
+# export as PDFs
+dir.create("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/EDA_figs")
+ggexport(plotsArranged, filename="/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/EDA_figs/SigMetabsChangeBasal_EDA_bxplots.pdf")
+```
+
+## Incorporate in physiological data - and plot correlations/lm
+
+There is limited physiological data, therefore significant changes in Day 1 to Day 10 metabolites were plotted to change in muscle CSA, with baseline metabolites with SOFA scores
+
+```{r}
+# get sig metabs
+metabs <- colnames(BasalTimeSigAllMetabs)[9:ncol(BasalTimeSigAllMetabs)]
+# pivot sig metab data
+allSigMetabsLong <- BasalTimeSigAllMetabs %>% pivot_longer(cols = `Acetone`:`Alanine_2`, names_to = 'metab', values_to = 'values')
+
+# get day 1 & day 10 data for each metabolite
+d1 <- allSigMetabsLong %>% filter(Day == 'd1')
+BaselineMetabs <- allSigMetabsLong %>% filter(Day == 'd1') # for OrganFail Data Analyses
+d10 <- allSigMetabsLong %>% filter(Day == 'd10')
+# who has no day 10 data
+no_d10 <- setdiff(d1$PtID, d10$PtID)
+no_d1 <- setdiff(d10$PtID, d1$PtID)
+outs <- c(no_d10, no_d1)
+# drop these people from d1 dataset
+d1 <- d1 %>% filter(!PtID %in% outs) %>% rename(values_1 = values)
+d10 <- d10 %>% filter(!PtID %in% outs) %>% rename(values_10 = values)
+# check same dimensions
+dim(d1)
+dim(d10)
+
+# bind data back into single dataframe
+allMetabsD1_D10 <- cbind(d1, d10$values_10) 
+allMetabsD1_D10 <- rename(allMetabsD1_D10, values_10 = `d10$values_10`) # rename new cols
+
+# create delta change variable for metabs
+allMetabsD1_D10Diffs <- allMetabsD1_D10 %>% mutate(diffs = values_1 - values_10)
+
+# load in phenotype data for patients
+phenoData <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/IVC data for DW 250121.csv")
+
+# match patient IDs to metab data for phenoData
+d1_d10_pt_ids <- allMetabsD1_D10Diffs$PtID
+phenoData <- phenoData %>% filter(UIN %in% d1_d10_pt_ids)
+
+# create muscle CSA difference metric
+phenoData <- phenoData %>% mutate(musc_diffs = `RFCSA D1 (%)` - `RFCSA D10 (%)`) %>% rename(PtID = UIN)
+phenoData$PtID <- as.character(phenoData$PtID)
+allMetabsD1_D10Diffs$PtID <- as.character(allMetabsD1_D10Diffs$PtID)
+
+# join to create final dataframe for correl plots for phenoData
+allD1_D10Diffs<- inner_join(allMetabsD1_D10Diffs, phenoData, by = 'PtID')
+allD1_D10Diffs <- allD1_D10Diffs[,-c(13:22)]
+head(allD1_D10Diffs)
+
+# create loop to run through all metabs and save plot to list for CSA diffs
+plot_listCorrel <- list() # to hold generated plots
+metabName <- vector()
+RSquared <- vector()
+pVal <- vector()
+metabs <- unique(allD1_D10Diffs$metab)
+
+# loop for CSA diffs ~ metab diffs
+for (i in 1:length(metabs)) { # loop to create plots per metabolite
+  pltMetab <- metabs[i]
+  plotDataFrame <- allD1_D10Diffs %>% filter(metab == pltMetab)
+  res <- lm(musc_diffs ~ diffs, plotDataFrame) # run linear model
+  sum <- summary(res) # extract summary model values
+  plt <- ggplot(plotDataFrame, aes(diffs, musc_diffs)) + geom_point() + facet_wrap(~metab) + geom_smooth(method = "lm")
+  plt <- plt + xlab("Day 1 - Day 10 Metabolite Abundance Change (AU)") + ylab("Day 1 - Day 10 Muscle CSA % Decline")
+  plt <- plt + font("ylab", size = 10) +
+    font("x.text", size = 10) +
+    font("y.text", size = 10)
+  # plt <- plt + ggtitle(paste0(pltMetab, "R squared"))
+  # cache plots in list
+  plot_listCorrel[[i]] <- plt
+  metabName <- append(metabName, pltMetab)
+  RSquared <- append(RSquared, sum$r.squared)
+  pVal <- append(pVal, sum$coefficients[2,4])
+} 
+
+linearModelOut <- data.frame(Metabolite = metabName, 
+                             RSquared = RSquared,
+                             p_value = pVal) # linear model results table
+
+# write out linear model results
+write.csv(linearModelOut, "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/sigMetabLinearRegressionOutput.csv")
+# arrange plots into 4 plots per page
+plotsArranged <- ggarrange(plotlist = plot_listCorrel, nrow = 2, ncol = 1, common.legend = TRUE, legend = "bottom")
+# export as PDFs
+ggexport(plotsArranged, filename="/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/EDA_figs/SigMetabsCorrelMassPlots.pdf")
+
+
+### sofa scores with baseline metabs data ###
+
+# load in organ failure score and link to baseline metabs
+organFail <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/OrganFailureScoreNoValRemoved.csv")
+organFail <- organFail[,-2] %>% rename(PtID = UIN)
+# join to create final dataframe for correl plots for organ failure data
+allBaselineOrganFail<- inner_join(BaselineMetabs, organFail, by = 'PtID')
+
+# create loop to run through all metabs and save plot to list for SOFA scores
+plot_listCorrelSofa <- list() # to hold generated plots
+metabNameSofa <- vector()
+RSquaredSofa <- vector()
+pValSofa <- vector()
+metabsSofa <- unique(allBaselineOrganFail$metab)
+
+# loop for SOFA ~ metab baseline
+for (i in 1:length(metabsSofa)) { # loop to create plots per metabolite
+  pltMetab <- metabsSofa[i]
+  plotDataFrame <- allBaselineOrganFail %>% filter(metab == pltMetab)
+  res <- lm(`SOFA score` ~ values, plotDataFrame) # run linear model
+  sum <- summary(res$coefficients) # extract summary model values
+  plt <- ggplot(plotDataFrame, aes(values, `SOFA score`)) + geom_point() + facet_wrap(~metab) + geom_smooth(method = "lm")
+  plt <- plt + xlab("Day 1 Metabolite Abundance Change (AU)") + ylab("SOFA Score")
+  plt <- plt + font("ylab", size = 10) +
+    font("x.text", size = 10) +
+    font("y.text", size = 10)
+  # plt <- plt + ggtitle(paste0(pltMetab, "R squared"))
+  # cache plots in list
+  plot_listCorrelSofa[[i]] <- plt
+  metabNameSofa <- append(metabNameSofa, pltMetab)
+  RSquaredSofa <- append(RSquaredSofa, sum$r.squared)
+  pValSofa <- append(pValSofa, sum$coefficients[2,4])
+} 
+
+linearModelOutSofa <- data.frame(Metabolite = metabNameSofa, 
+                             RSquared = RSquaredSofa,
+                             p_value = pValSofa) # linear model results table
+
+# write out linear model results
+write.csv(linearModelOutSofa, "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/sigMetabLinearRegressionOutputSofa.csv")
+# arrange plots into 4 plots per page
+plotsArranged <- ggarrange(plotlist = plot_listCorrelSofa, nrow = 2, ncol = 1, common.legend = TRUE, legend = "bottom")
+# export as PDFs
+ggexport(plotsArranged, filename="/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/EDA_figs/SigMetabsCorrelSofaPlots.pdf")
+
+
+# load in csv files for table construction
+## Sig Metabolite Linear Regression Output Table ##
+linearModelOut <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/sigMetabLinearRegressionOutput_2.csv")
+# remove column 1
+linearModelOut <- linearModelOut[,-1]
+# use SjPlot to export as HTML
+tab_df(linearModelOut, title = "Linear Regression Analyses of Changing Metabolite Abundance Over 10 Days Against Muscle CSA Change", digits = 4, col.header = c("Metabolite", "R Squared", "p value"), file = "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/sigMetabMuscleDiff_lm")
+
+# load in csv files for table construction
+## Sig Metabolite Linear Regression SOFA Output Table ##
+linearModelOutSofa <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/sigMetabLinearRegressionOutputSofa_2.csv")
+# remove column 1
+linearModelOutSofa <- linearModelOutSofa[,-1]
+# Use SjPlot Here to export
+tab_df(linearModelOutSofa, title = "Linear Regression Analyses of Baseline Metabolite Abundance Against SOFA Organ Failure Score", digits = 4,col.header = c("Metabolite", "R Squared", "p value"), file = "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/BaselineMetabSOFA_lm_2")
+
+# load in csv files for table construction
+## Sig Metab Summary Tables
+linearModelOutSofa <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/sigMetabLinearRegressionOutputSofa_2.csv")
+# remove column 1
+linearModelOutSofa <- linearModelOutSofa[,-1]
+# Use SjPlot Here to export
+tab_df(linearModelOutSofa, title = "Linear Regression Analyses of Baseline Metabolite Abundance Against SOFA Organ Failure Score", digits = 4,col.header = c("Metabolite", "R Squared", "p value"), file = "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/BaselineMetabSOFA_lm_2")
+
+# load in csv files for table construction
+## Sig Metab Summary Tables
+sigMetabOutput <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/sigMetabOutput_2.csv")
+sigMetabOutput <- sigMetabOutput[,-c(7, 3)]
+# Use SjPlot Here to export
+tab_df(sigMetabOutput, title = "Significant Metabolites Changing in Abundance from D1 to D10", digits = 4,col.header = c("Metabolite", "log Fold Change Abundance", "t Statistic", "p value", "FDR Corrected p value", "HMDB Number", "Metabolic Pathway"), file = "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AllMetabsFinal/SignificantMetabsAllTable")
+
+#### END ####
+```

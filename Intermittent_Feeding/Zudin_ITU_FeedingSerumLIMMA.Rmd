@@ -1,0 +1,262 @@
+---
+title: "Non_NormlaisedNMR_ITU_Study - Linear Mixed Effects Models Analyses"
+author: "DJW & IJG"
+date: "07/05/2020"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+load libraries and packages
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggfortify)
+library(ggpubr)
+library(pheatmap)
+library(limma)
+library(splines)
+```
+
+## Linear Mixed Model Test
+this next section attempts to use the LIMMA R package to run a Linear Mixed Effect Model for Modelling and Analysis of Time Course Data to assess some basic differential expression values for group, time and group x time interactions - see LIMMA package for details of functions. 
+
+```{r}
+# load in all_data_wider
+all_data_wider <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/LipidOnly/allDataTidywider_LipidNMR.csv", col_select = -1)
+#all_data_wider <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AAOnly/allDataTidywider_AANMR.csv", col_select = -1)
+#all_data_wider <- read_csv("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/SmallMolOnly/allDataTidywider_SmallMolNMR.csv", col_select = -1)
+
+# need to create new data column for timepoint vector using mosaic package
+library(mosaic)
+# create new timepoint column based on conditional arguments of other columns values
+all_data_wider <- mutate(all_data_wider, timePoint = derivedFactor(
+  "0" = (Day == "d1" & Sample_time == "9_1"),
+  "1" = (Day == "d1" & Sample_time == "9_2"),
+  "4" = (Day == "d1" & Sample_time == "1_1"),
+  "5" = (Day == "d1" & Sample_time == "1_2"),
+  "168" = (Day == "d7" & Sample_time == "9_1"),
+  "169" = (Day == "d7" & Sample_time == "9_2"),
+  "172" = (Day == "d7" & Sample_time == "1_1"),
+  "173" = (Day == "d7" & Sample_time == "1_2"),
+  "240" = (Day == "d10" & Sample_time == "9_1"),
+  "241" = (Day == "d10" & Sample_time == "9_2"),
+  "244" = (Day == "d10" & Sample_time == "1_1"),
+  "245" = (Day == "d10" & Sample_time == "1_2"),
+  method = "first",
+  .default = NA)
+)
+
+# create new samplepoint factor column based on conditional arguments of other columns values
+all_data_wider <- mutate(all_data_wider, samplePoint = derivedFactor(
+  "d1_9_1" = (Day == "d1" & Sample_time == "9_1"),
+  "d1_9_2" = (Day == "d1" & Sample_time == "9_2"),
+  "d1_1_1" = (Day == "d1" & Sample_time == "1_1"),
+  "d1_1_2" = (Day == "d1" & Sample_time == "1_2"),
+  "d7_9_1" = (Day == "d7" & Sample_time == "9_1"),
+  "d7_9_2" = (Day == "d7" & Sample_time == "9_2"),
+  "d7_1_1" = (Day == "d7" & Sample_time == "1_1"),
+  "d7_1_2" = (Day == "d7" & Sample_time == "1_2"),
+  "d10_9_1" = (Day == "d10" & Sample_time == "9_1"),
+  "d10_9_2" = (Day == "d10" & Sample_time == "9_2"),
+  "d10_1_1" = (Day == "d10" & Sample_time == "1_1"),
+  "d10_1_2" = (Day == "d10" & Sample_time == "1_2"),
+  method = "first",
+  .default = NA)
+)
+all_data_wider <- all_data_wider[, c(1:5, ncol(all_data_wider)-1, ncol(all_data_wider), 6:ncol(all_data_wider)-2)] # reorder columns
+all_data_wider <- all_data_wider[,-c(8:9)] # DJW - duplicating day and Sample_point for some reason here - so removed
+# create required inputs for lmmsDE function
+dat <- all_data_wider[,9:ncol(all_data_wider)] # data matrix with each row representing an experimental sample, and each column a single metabolite
+
+timepoints <- all_data_wider$timePoint # a numeric vector containing the time points on which each sample is measured
+timepoints <- as.numeric(as.character(timepoints)) # pain in the arse R ism! have to convert factor to char first
+
+sampID <- as.numeric(all_data_wider$PtID) # a character vector containing the sample names
+class <- all_data_wider$arm # a character vector indicating the group of each sample
+site_id <- as.numeric(all_data_wider$site_id)
+namesMetab <- colnames(dat) # grab metab colnames
+
+set.seed(101)
+
+## run linear mixed model differential expression analyses on data using limma
+# design your group * time effect (here time is treated as continuous, but can be changed to be factorised)
+design <- model.matrix(~class*timepoints)
+
+#Block your subject specific variablity (baseline differences between subjects)
+dupcor <- duplicateCorrelation(t(dat),design,block=sampID)
+dupcor$consensus.correlation
+
+# fit mixed effect linear models
+fit <- lmFit(object = t(dat), design = design,block = sampID,correlation=dupcor$consensus)
+fit <- eBayes(fit) #? adjust the proportion
+# fit2 <- eBayes(fit, proportion = 0.05)
+
+# Extract statistics of molecules changing between group
+groupEffect <- topTable(fit, coef=2,number = Inf)
+head(groupEffect[groupEffect$P.Value<.05,])
+
+#Extract statistics of molecules changing over time
+timeEffect <- topTable(fit, coef=3,number = Inf)
+head(timeEffect[timeEffect$P.Value<.05,])
+# Sig effect of time
+
+#Extract statistics of molecules changing differently between groups over time
+groupTimeEffect <-topTable(fit, coef=4, number = Inf)
+head(groupTimeEffect[groupTimeEffect$P.Value<.05,])
+
+## from this linear effects mixed model approach there seems to be no group effect in terms of differences between feeding types but there is a time effect - create contrasts to see which is affected
+
+### Basal Time Effect collapsed for groups
+
+# reduce data set to only basal time points
+all_data_widerBasal <- all_data_wider %>% filter(Sample_time == "9_1")
+
+# create data matrix with each row representing an experimental sample, and each column a single metabolite
+datBasal <- all_data_widerBasal[,9:ncol(all_data_widerBasal)] 
+
+timepointsBasal <- all_data_widerBasal$timePoint # a numeric vector containing the time points on which each sample is measured
+timepointsBasal <- as.character(timepointsBasal) # pain in the arse R ism! have to convert factor to char first
+timepointsBasal <- as.numeric(timepointsBasal)
+
+sampIDBasal <- all_data_widerBasal$PtID # a character vector containing the sample names
+classBasal <- all_data_widerBasal$arm # a character vector indicating the group of each sample
+namesMetab <- colnames(datBasal) # grab metab colnames
+
+# create variables for between and within sample analyses using 2 x 2 factorial design - feed and time
+all_data_widerBasal$samplePoint <- as.character(all_data_widerBasal$samplePoint)
+sampleFeed <- factor(all_data_widerBasal$samplePoint)
+
+# reorder sample feed factor - Cheers IJG!
+sampleFeed <- sampleFeed %>% fct_relevel('d1_9_1', 'd7_9_1', 'd10_9_1')
+
+#design your samplepoint * feed effect and interactions
+design <- model.matrix(~ 0 + sampleFeed) # here the column order was 1, 10, 7
+
+# below you labeled the columns 1, 7, 10... but the order was as above
+colnames(design) <- unique(sampleFeed) # add new colnames
+
+#Block your subject specific variablity (baseline differences between subjects)
+dupcor <- duplicateCorrelation(t(datBasal), design, block=sampIDBasal)
+dupcor$consensus.correlation
+
+# run linear model fit - This fits a model with six coefficients corresponding to feed by time
+fit <- lmFit(t(datBasal),design,block=sampIDBasal,correlation=dupcor$consensus)
+fit <- eBayes(fit)
+topTable(fit)
+
+# Contrasts of interest can now be extracted - Basal Contrasts by Feed
+cmBasalTime <- makeContrasts(BasalD7_D1 = d7_9_1 - d1_9_1,
+                                 BasalD10_D1 = d10_9_1 - d1_9_1,
+                                 BasalD10_D7 = d10_9_1 - d7_9_1,
+                    levels = design)
+
+# store names of contrast in variable
+contrastNames <- names(as.data.frame(cmBasalTime))
+
+# Then compute these contrasts and moderated t-tests
+fitBasalTime <- contrasts.fit(fit, cmBasalTime)
+fitBasalTime <- eBayes(fitBasalTime)
+
+# store individual fit data for each molecule type - remove comment dependent on each
+#fitBasalTime_AA <- fitBasalTime
+fitBasalTime_Lipid <- fitBasalTime
+#fitBasalTime_SmallMol <- fitBasalTime
+
+# save global environment
+
+
+# pull out up and down expression summary data
+dtBasalTime  <- decideTests(fitBasalTime)
+dESumBasalTime  <- summary(dtBasalTime)
+metabType = "SmallMolOnly"
+#metabType = "LipidOnly"
+#metabType = "AAOnly"
+write.csv(dESumBasalTime, paste0("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/", metabType, "/BasalTimeContrasts/dESumBasalTime.csv"))
+
+# create loop to extract, export and save tables of each DE contrast metab Data 
+sigMetabBasalTime <- list() # create blank list
+
+for (i in 1:length(contrastNames)) {
+  contrast <- paste0(contrastNames[i])
+  topMetab <- topTable(fitBasalTime, coef = contrast, n = Inf)
+  topMetab2 <- topMetab %>% filter(adj.P.Val <= 0.05) # only run if significant
+  write.csv(topMetab, paste0("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/", metabType, "/BasalTimeContrasts/Metabs",contrast, "DE.csv"))
+  sigMetabBasalTime <<- c(sigMetabBasalTime, row.names(topMetab2))
+}
+
+uniquesigMetabBasalTime <- unlist(unique(sigMetabBasalTime)) # extract out unique sig metabolites
+
+# extract out list of FDR corrected metabolites for all contrasts in this comparison
+boolIndexMetab <- which(colnames(all_data_widerBasal) %in% uniquesigMetabBasalTime) # index
+BasalTimeSig <- all_data_widerBasal[,boolIndexMetab] # trim dataframe to sig only
+BasalTimeSig <- cbind(all_data_widerBasal[,1:8], BasalTimeSig)
+write.csv(BasalTimeSig, paste0("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/", metabType, "/BasalTimeContrasts/BasalTimeSig",metabType,".csv")) # write out metabs
+
+### Contrasts of interest can now be extracted - All Time Contrasts ###
+
+# create variables for between and within sample analyses using 2 x 2 factorial design - feed and time for all data
+all_data_wider$samplePoint <- as.character(all_data_wider$samplePoint)
+sampleFeed <- factor(all_data_wider$samplePoint)
+
+# reorder sample feed factor - As above
+sampleFeed <- sampleFeed %>% fct_relevel("d1_9_1", "d1_9_2", "d1_1_1", "d1_1_2", "d7_9_1", "d7_9_2", "d7_1_1", "d7_1_2", "d10_9_1", "d10_9_2", "d10_1_1", "d10_1_2")
+
+#design your samplepoint * feed effect and interactions
+design <- model.matrix(~ 0 + sampleFeed)
+colnames(design) <- unique(sampleFeed) # add new colnames
+
+#Block your subject specific variablity (baseline differences between subjects)
+dupcor <- duplicateCorrelation(t(dat), design, block=sampID)
+dupcor$consensus.correlation
+
+# run linear model fit - This fits a model with six coefficients corresponding to feed by time
+fit <- lmFit(t(dat),design,block=sampID,correlation=dupcor$consensus)
+fit <- eBayes(fit)
+topTable(fit)
+
+cmAllTime <- makeContrasts(Early_d1 = d1_9_2 - d1_9_1,
+                               Mid_d1 = d1_1_1 - d1_9_2,
+                               Late_d1 = d1_1_2 - d1_1_1,
+                               Early_d7 = d7_9_2 - d7_9_1,
+                               Mid_d7 = d7_1_1 - d7_9_2,
+                               Late_d7 = d7_1_2 - d7_1_1,
+                               Early_d10 = d10_9_2 - d10_9_1,
+                               Mid_d10 = d10_1_1 - d10_9_2,
+                               Late_d10 = d10_1_2 - d10_1_1,
+                      levels = design)
+
+# store names of contrast in variable
+contrastNames <- names(as.data.frame(cmAllTime))
+
+# Then compute these contrasts and moderated t-tests
+fitAllTime <- contrasts.fit(fit, cmAllTime)
+fitAllTime <- eBayes(fitAllTime)
+
+# pull out up and down expression summary data
+dtAllTime  <- decideTests(fitAllTime)
+dESumAllTime  <- summary(dtAllTime) # very few sig metabs on contrasts
+write.csv(dESumBasalTime, paste0("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/", metabType, "/AllTimeContrasts/dESumAllTime.csv"))
+
+# create loop to extract, export and save tables of each DE contrast metab Data - ONLY RUN IF METABS ARE SIGNIFICANT HERE
+sigMetabAllTime <- list() # creat blank list
+
+for (i in 1:length(contrastNames)) {
+  contrast <- paste0(contrastNames[i])
+  topMetab <- topTable(fitAllTime, coef = contrast, n = Inf)
+  topMetab2 <- topMetab %>% filter(adj.P.Val <= 0.05) # only run if significant
+  write.csv(topMetab, paste0("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/", metabType, "/AllTimeContrasts/Metabs",contrast, "DE.csv"))
+  sigMetabAllTime <<- c(sigMetabAllTime, row.names(topMetab2))
+}
+
+uniquesigMetabAllTime <- unlist(unique(sigMetabAllTime)) # extract out unique sig metabolites
+
+# extract out list of FDR corrected metabolites for all contrasts in this comparison
+boolIndexMetab <- which(colnames(all_data_wider) %in% uniquesigMetabAllTime) # index
+AllTimeSig <- all_data_wider[,boolIndexMetab] # trim dataframe to sig only
+AllTimeSig <- cbind(all_data_wider[,1:8], AllTimeSig)
+write.csv(AllTimeSig, paste0("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/", metabType, "/AllTimeContrasts/AllTimeSig", metabType, ".csv")) # write out metabs
+
+## All linear mixed effects modelling complete ##
+
+```

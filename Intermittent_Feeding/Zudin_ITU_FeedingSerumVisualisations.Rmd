@@ -1,0 +1,98 @@
+---
+title: "Non_NormlaisedNMR_ITU_Study - Visualisations and Exploratory Plotting Part 2"
+author: "DJW & IJG"
+date: "07/05/2020"
+output: word_document
+editor_options: 
+  chunk_output_type: console
+---
+
+load libraries and packages
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggfortify)
+library(ggpubr)
+library(pheatmap)
+library(limma)
+library(splines)
+```
+
+## PCA & Exploratory plots 
+
+Prepare data for initial exploratory plots for simple visualisation.
+
+```{r}
+# read in data if not already in environment - uncomment if needed
+# set file directory location for file written out in part 1
+# file_dir <- ""
+all_data <- read_csv(file_dir)
+
+# reorder days factors, relevel automatically converts chr to fct
+all_data$Day <-  all_data$Day %>% fct_relevel(c('d1', 'd7', 'd10'))
+# reorder times factor
+all_data$Sample_time <- all_data$Sample_time %>% fct_relevel(c('9_1', '9_2', '1_1', '1_2'))
+
+# try simple PCA plot for initial visualisation
+# convert format to wider
+all_data_wider <- pivot_wider(all_data, names_from = Metabs, values_from = Peak_Area)
+names(all_data_wider)
+# write out all_data_wider to file
+# write.csv(all_data_wider, "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AAOnly/allDataTidywider_AANMR.csv") # change for each metabolite
+#write.csv(all_data_wider, "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/SmallMolOnly/allDataTidywider_SmallMolNMR.csv") # change for each metabolite
+write.csv(all_data_wider, "/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/LipidOnly/allDataTidywider_LipidNMR.csv") # change for each metabolite
+
+# can select columns as a sequence; here based on names(...) above
+test_pca <- all_data_wider %>% dplyr::select(`Cholesterol`:`Unsaturated fatty acids CH`)
+#test_pca <- all_data_wider %>% dplyr::select(`Isobutyric acid`:`Formic acid`)
+#test_pca <- all_data_wider %>% dplyr::select(`Leucine`:`Tryptophan`)
+# run pca
+train.pca <- prcomp(test_pca) 
+
+# use autoplot for nicer plot
+test_pca$Arm <- as.factor(all_data_wider$arm) # add arm ID back in
+test_pca$Day <- as.factor(all_data_wider$Day) # add Day back in
+test_pca$Sample_time <- as.factor(all_data_wider$Sample_time) # add Day back in
+
+pcaPlot <- list() # create blank list
+varNames <- c("Sample_time", "Day", "Arm") # create list of variable names to plot
+for (i in 1:length(varNames)){
+  plt <- ggplot2::autoplot(train.pca, scale=0, data=test_pca , colour=varNames[i], frame.type = "norm", level = 0.95)
+  pcaPlot[[i]] <- plt
+}
+# arrange plots
+plotsArranged <- ggarrange(plotlist = pcaPlot, nrow = 3, ncol = 1)
+# export as PDFs - change based on input
+#dir.create("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/SmallMolOnly/EDA_Figs")
+#dir.create("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/LipidOnly/EDA_Figs")
+dir.create("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AAOnly/EDA_Figs")
+#ggexport(plotsArranged, filename="/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/SmallMolOnly/EDA_Figs/ExploratoryPCAPlots.pdf")
+ggexport(plotsArranged, filename="/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/LipidOnly/EDA_Figs/ExploratoryPCAPlots.pdf")
+#ggexport(plotsArranged, filename="/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AAOnly/EDA_Figs/ExploratoryPCAPlots.pdf")
+
+### HEAT MAPS ###
+# CREATE BASIC HEAT MAP
+# http://compbio.ucsd.edu/making-heat-maps-r/#pheatmap
+## Heatmap for 2 factor data - ALL DATA REDUCED pre contrasts DE
+# create data files in correct structure for heatmaps
+
+heatData <- as.data.frame(all_data_wider[,c(3,9:ncol(all_data_wider))])
+annotations <- as.data.frame(all_data_wider[, c(2:6)])
+
+# add row.names
+row.names(heatData) <- heatData[,1]
+row.names(annotations) <- annotations[,2]
+heatData <- heatData[,-1]
+annotations <- annotations[,-2]
+t_heatData <- t(heatData)
+
+# create pdfs of heatmap
+#pdf("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/SmallMolOnly/EDA_Figs/ExploratoryHeatMapPlots.pdf")
+pdf("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/LipidsOnly/EDA_Figs/ExploratoryHeatMapPlots.pdf")
+#pdf("/Users/mdzdw/Documents/WorkFolders/ResearchWork/PROJECT_ExtCollab/Zudin_ICU/Non_Normalised_ITUFeeding/FINAL_Data/AAOnly/EDA_Figs/ExploratoryHeatMapPlots.pdf")
+pheatmap(t_heatData, show_rownames = TRUE, annotation_col = annotations, annotation_names_row = TRUE, scale='row', cluster_cols=TRUE, cluster_rows=TRUE,  clustering_distance_columns = 'correlation', clustering_distance_rows='correlation', color = colorRampPalette(c("navy", "white", "firebrick3"))(50), show_colnames=FALSE, fontsize=7)
+dev.off()
+
+## END
+```
+
